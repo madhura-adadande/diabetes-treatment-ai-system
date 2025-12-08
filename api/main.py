@@ -32,7 +32,9 @@ app.add_middleware(
 class RealTrainedDiabetesAgent:
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model_path = Path("../models")
+        # Handle both running from api/ directory and project root
+        base_path = Path(__file__).parent.parent
+        self.model_path = base_path / "models"
         
         self.treatments = {
             0: "Lifestyle Modification Only",
@@ -304,40 +306,69 @@ You're having a real conversation, not giving a lecture."""
             "Content-Type": "application/json"
         }
         
-        payload = {
-            "model": "llama3-8b-8192",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message}
-            ],
-            "max_tokens": 280,
-            "temperature": 0.9,
-            "top_p": 0.95
-        }
+        # Try multiple models in order of preference
+        models_to_try = [
+            "llama-3.1-8b-instant",
+            "llama-3.1-70b-versatile", 
+            "mixtral-8x7b-32768",
+            "llama-3-8b-8192",
+            "gemma-7b-it"
+        ]
         
-        try:
-            print(f"🤖 Dr. Sarah responding to: '{message[:30]}...'")
-            response = requests.post(self.groq_url, headers=headers, json=payload, timeout=25)
+        last_error = None
+        for model_name in models_to_try:
+            payload = {
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message}
+                ],
+                "max_tokens": 280,
+                "temperature": 0.9,
+                "top_p": 0.95
+            }
             
-            if response.status_code == 200:
-                result = response.json()
-                ai_response = result["choices"][0]["message"]["content"].strip()
-                print(f"✅ Dr. Sarah responded: '{ai_response[:50]}...'")
-                return ai_response
-            elif response.status_code == 401:
-                return "🔑 I'm having trouble with my credentials. Please check the Groq API key in your .env file."
-            elif response.status_code == 429:
-                return "⏱️ I'm getting a lot of questions right now! Please wait just a moment and ask me again."
-            else:
-                return "🔧 I'm having some technical difficulties right now. Let me try to help you anyway - what specific question do you have about your diabetes treatment?"
-                
-        except requests.exceptions.Timeout:
-            return "⏱️ Sorry, I'm taking longer than usual to think of a good response. Could you ask your question again?"
-        except requests.exceptions.ConnectionError:
-            return "🌐 I'm having trouble with my internet connection. Can you try asking again in a moment?"
-        except Exception as e:
-            print(f"❌ Chatbot error: {e}")
-            return "🔧 I'm experiencing some technical issues. Let me try to help you anyway - could you rephrase your question about diabetes or your treatment?"
+            try:
+                print(f"🤖 Dr. Sarah responding to: '{message[:30]}...' (trying model: {model_name})")
+                response = requests.post(self.groq_url, headers=headers, json=payload, timeout=25)
+            
+                if response.status_code == 200:
+                    result = response.json()
+                    ai_response = result["choices"][0]["message"]["content"].strip()
+                    print(f"✅ Dr. Sarah responded using {model_name}: '{ai_response[:50]}...'")
+                    return ai_response
+                    error_detail = response.text
+                    print(f"❌ Groq API authentication failed (401): {error_detail}")
+                    return "🔑 I'm having trouble with my credentials. Please check the Groq API key in your .env file. You can get a free API key from https://console.groq.com/"
+                elif response.status_code == 429:
+                    return "⏱️ I'm getting a lot of questions right now! Please wait just a moment and ask me again."
+                elif response.status_code == 404:
+                    # Model not found, try next model
+                    print(f"⚠️ Model {model_name} not available, trying next...")
+                    last_error = f"Model {model_name} not found"
+                    continue
+                else:
+                    # For other errors, try next model unless it's a critical error
+                    error_detail = response.text[:500]
+                    print(f"⚠️ Groq API error with {model_name}: Status {response.status_code}, trying next model...")
+                    last_error = f"Status {response.status_code}: {error_detail[:100]}"
+                    continue
+                    
+                print(f"⚠️ Groq API timeout with {model_name}, trying next model...")
+                last_error = "Timeout"
+                continue
+            except requests.exceptions.ConnectionError as e:
+                print(f"⚠️ Groq API connection error with {model_name}: {e}, trying next model...")
+                last_error = f"Connection error: {str(e)[:100]}"
+                continue
+            except Exception as e:
+                print(f"⚠️ Error with {model_name}: {type(e).__name__}: {e}, trying next model...")
+                last_error = f"{type(e).__name__}: {str(e)[:100]}"
+                continue
+        
+        # If we get here, all models failed
+        print(f"❌ All Groq models failed. Last error: {last_error}")
+        return f"🔧 I'm experiencing technical issues connecting to the AI service. Last error: {last_error}. Please check your Groq API key and internet connection, then try again."
 
     def recommend_treatment(self, features):
         """DQN manual confidence, Policy Gradient PURE from your 500-episode training"""
@@ -513,17 +544,62 @@ async def chat_with_medical_ai(chat_request: ChatRequest):
 async def test_groq():
     """Test if Groq API is working"""
     try:
-        test_response = await chatbot.get_medical_response("Hello Dr. Sarah, test response", None)
-        return {
-            "groq_status": "connected" if "technical difficulties" not in test_response else "error",
-            "api_key_present": bool(os.getenv("GROQ_API_KEY")),
-            "test_response": test_response
+        # Test with a simple request to see actual error
+        import requests
+        groq_key = os.getenv("GROQ_API_KEY")
+        if not groq_key:
+            return {
+                "groq_status": "no_key",
+                "api_key_present": False,
+                "message": "GROQ_API_KEY not found in environment"
+            }
+        
+        # Try to make a real API call to see the error
+        headers = {
+            "Authorization": f"Bearer {groq_key}",
+            "Content-Type": "application/json"
         }
+        payload = {
+            "model": "llama-3.1-8b-instant",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 10
+        }
+        
+        response = requests.post("https://api.groq.com/openai/v1/chat/completions", 
+                                headers=headers, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            return {
+                "groq_status": "connected",
+                "api_key_present": True,
+                "test_response": "API is working correctly"
+            }
+        else:
+            error_detail = response.text
+            try:
+                error_json = response.json()
+                error_msg = error_json.get('error', {})
+                return {
+                    "groq_status": "error",
+                    "api_key_present": True,
+                    "status_code": response.status_code,
+                    "error": error_msg,
+                    "raw_response": error_detail[:500]
+                }
+            except:
+                return {
+                    "groq_status": "error",
+                    "api_key_present": True,
+                    "status_code": response.status_code,
+                    "raw_response": error_detail[:500]
+                }
     except Exception as e:
+        import traceback
         return {
-            "groq_status": "error",
+            "groq_status": "exception",
             "api_key_present": bool(os.getenv("GROQ_API_KEY")),
-            "error": str(e)
+            "error": str(e),
+            "traceback": traceback.format_exc()
         }
 
 @app.get("/health")

@@ -64,4 +64,7 @@ package-lock.json
 # Build artifacts
 build/
 dist/
-*.egg-info/
+*.egg-info/"GIT_GUIDE.md" 
+"HOW_TO_RUN.md" 
+"QUICK_START.md" 
+"RUN_MANUALLY.md" 
