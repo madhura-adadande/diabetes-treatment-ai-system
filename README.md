@@ -369,13 +369,6 @@ This project demonstrates:
 - **Multi-User Support**: Concurrent healthcare provider access
 - **Audit Trail**: Complete treatment recommendation logging
 
-## 📞 Contact
-
-**Developer**: Ashwin Badamikar  
-**Course**: Prompt Engineering and GenAI  
-**GitHub**: https://github.com/ashwin-badamikar  
-**Repository**: https://github.com/ashwin-badamikar/diabetes-treatment-ai-system  
-
 ## 🌟 Awards and Recognition
 
 This project represents:
